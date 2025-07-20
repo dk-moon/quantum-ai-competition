@@ -129,7 +129,6 @@ for epoch in tqdm(range(epochs)):
     total_loss, total_acc = 0, 0
     
     for xb, yb in train_loader:
-        # 데이터가 이미 double precision으로 변환됨
         optimizer.zero_grad()
         preds = model(xb)
         loss = criterion(preds, yb)
