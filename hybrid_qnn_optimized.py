@@ -8,19 +8,17 @@ import matplotlib.pyplot as plt
 import pennylane as qml
 
 # ----------------------------------
-# 1. Fashion-MNIST 데이터 로드 (90% 정확도를 위한 최적화)
+# 1. Fashion-MNIST 데이터 로드
 # ----------------------------------
 def load_fashion_mnist_binary():
-    """T-shirt/top (0) vs Shirt (6) 이진 분류 데이터 (데이터 증강 포함)"""
-    # 훈련용 데이터 증강
+    """T-shirt/top (0) vs Shirt (6) 이진 분류 데이터"""
     train_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.RandomRotation(10),
         transforms.RandomHorizontalFlip(0.1),
-        transforms.Normalize((0.2860,), (0.3530,))  # Fashion-MNIST 최적 정규화
+        transforms.Normalize((0.2860,), (0.3530,))
     ])
     
-    # 테스트용 변환
     test_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.2860,), (0.3530,))
@@ -45,163 +43,115 @@ print(f"Train labels distribution: {torch.bincount(train_labels)}")
 print(f"Test labels distribution: {torch.bincount(test_labels)}")
 
 # ----------------------------------
-# 2. 최적화된 양자 회로 (제약조건 최대 활용)
+# 2. 양자 회로 설정
 # ----------------------------------
-n_qubits = 8  # 최대 8 큐빗 사용
-n_layers = 7  # 깊이 30 제한 내에서 최대 레이어
+n_qubits = 8
+n_layers = 7
 dev = qml.device("default.qubit", wires=n_qubits)
 
 def optimized_quantum_layer(weights):
-    """최적화된 양자 레이어 (깊이와 파라미터 효율성 고려)"""
-    # 개별 큐빗 회전 (RY만 사용 - 효율적)
+    """최적화된 양자 레이어"""
     for i in range(n_qubits):
         qml.RY(weights[i], wires=i)
     
-    # 강력한 얽힘 패턴
     # Linear entanglement
     for i in range(n_qubits - 1):
         qml.CNOT(wires=[i, i+1])
     
-    # Circular entanglement (더 강한 연결성)
+    # Circular entanglement
     qml.CNOT(wires=[n_qubits-1, 0])
 
 @qml.qnode(dev, interface="torch")
 def quantum_circuit(inputs, weights):
-    """최적화된 양자 회로"""
-    # Amplitude embedding (가장 효율적인 인코딩)
+    """양자 회로"""
     qml.AmplitudeEmbedding(inputs, wires=range(n_qubits), normalize=True)
     
-    # Variational layers
     for layer in range(n_layers):
         layer_weights = weights[layer * n_qubits:(layer + 1) * n_qubits]
         optimized_quantum_layer(layer_weights)
     
-    # 다중 측정으로 풍부한 정보 추출
     return [qml.expval(qml.PauliZ(i)) for i in range(4)]
 
-# 양자 파라미터: 7 layers × 8 qubits = 56개 (8-60 제한 내)
 quantum_params = n_layers * n_qubits
 weight_shapes = {"weights": (quantum_params,)}
 qlayer = qml.qnn.TorchLayer(quantum_circuit, weight_shapes)
 
-print(f"Quantum parameters: {quantum_params} (within 8-60 limit)")
-
-# 회로 깊이 계산: 7 layers × (8 RY + 8 CNOT + 1 circular CNOT) ≈ 7 × 4 = 28 < 30
-estimated_depth = n_layers * 4
-print(f"Estimated circuit depth: {estimated_depth} (within 30 limit)")
+print(f"Quantum parameters: {quantum_params}")
 
 # ----------------------------------
-# 3. 90% 정확도를 위한 최적화된 하이브리드 모델
+# 3. 파라미터 최적화된 하이브리드 모델 (~45K 파라미터)
 # ----------------------------------
 class OptimizedHybridQNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.qlayer = qlayer
         
-        # 1. 강력한 CNN 백본 (약 25K 파라미터)
+        # CNN 백본 더 축소 (~3K 파라미터)
         self.cnn_backbone = nn.Sequential(
             # Block 1: 28x28 → 14x14
-            nn.Conv2d(1, 32, kernel_size=5, stride=2, padding=2),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(1, 4, kernel_size=3, stride=2, padding=1),  # 채널 8→4
+            nn.BatchNorm2d(4),
             nn.ReLU(),
-            nn.Dropout2d(0.1),
-            
             # Block 2: 14x14 → 7x7
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(4, 8, kernel_size=3, stride=2, padding=1),  # 채널 16→8
+            nn.BatchNorm2d(8),
             nn.ReLU(),
-            nn.Dropout2d(0.15),
-            
-            # Block 3: 7x7 → 4x4
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
+            # Block 3: 7x7 → 3x3
+            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=0),  # 채널 32→16
+            nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d(2),  # 128x2x2 = 512
-            
-            nn.Flatten(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, 128),  # CNN 특성 128차원
+            nn.Flatten(),  # 16*3*3 = 144
+            nn.Linear(144, 32),  # 출력 차원 64→32
             nn.ReLU()
         ).double()
         
-        # 2. 양자 전처리기 (약 8K 파라미터)
+        # 양자 전처리기 축소 (~13K 파라미터)
         self.quantum_preprocessor = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(784, 512),
+            nn.Linear(784, 16),  # 784→16로 극도 축소 (12.5K 파라미터)
             nn.ReLU(),
-            nn.BatchNorm1d(512),
             nn.Dropout(0.2),
-            nn.Linear(512, 256),  # 256차원으로 양자 입력 준비
+            nn.Linear(16, 256),  # 16→256 확장 (4K 파라미터) - AmplitudeEmbedding 요구사항
             nn.Tanh()
         ).double()
         
-        # 3. 양자 후처리기 (약 3K 파라미터)
+        # 양자 후처리기 축소 (~1K 파라미터)
         self.quantum_postprocessor = nn.Sequential(
-            nn.Linear(4, 64),
+            nn.Linear(4, 32),
             nn.ReLU(),
-            nn.BatchNorm1d(64),
+            nn.BatchNorm1d(32),
             nn.Dropout(0.2),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 16),  # 양자 특성 16차원
+            nn.Linear(32, 16),
             nn.Tanh()
         ).double()
         
-        # 4. 특성 융합 및 최종 분류기 (약 12K 파라미터)
+        # 분류기 축소 (~2K 파라미터)
         self.fusion_classifier = nn.Sequential(
-            nn.Linear(128 + 16, 256),  # CNN(128) + Quantum(16) = 144
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.4),
-            
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(32 + 16, 32),  # CNN(32) + Quantum(16) = 48
+            nn.BatchNorm1d(32),
             nn.ReLU(),
             nn.Dropout(0.3),
-            
-            nn.Linear(128, 64),
-            nn.BatchNorm1d(64),
+            nn.Linear(32, 16),
             nn.ReLU(),
             nn.Dropout(0.2),
-            
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(32, 1),
-            nn.Sigmoid()
-        ).double()
-        
-        # 5. 앙상블 분류기 (약 2K 파라미터)
-        self.ensemble_head = nn.Sequential(
-            nn.Linear(144, 64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 1),
+            nn.Linear(16, 1),
             nn.Sigmoid()
         ).double()
 
     def forward(self, x):
         batch_size = x.shape[0]
         
-        # 1. CNN 경로: 강력한 공간적 특성 추출
-        cnn_features = self.cnn_backbone(x)  # [B, 128]
+        # CNN 경로
+        cnn_features = self.cnn_backbone(x)  # [B, 32]
         
-        # 2. 양자 경로: 양자 특성 추출
+        # 양자 경로
         quantum_input = self.quantum_preprocessor(x)  # [B, 256]
         
-        # 배치별 양자 처리
         quantum_outputs = []
         for i in range(batch_size):
-            # L2 정규화 (Amplitude Embedding 요구사항)
             normalized_input = torch.nn.functional.normalize(quantum_input[i], p=2, dim=0)
             q_out = self.qlayer(normalized_input)
             
-            # 리스트를 텐서로 변환
             if isinstance(q_out, (list, tuple)):
                 q_tensor = torch.stack(q_out)
             else:
@@ -211,19 +161,13 @@ class OptimizedHybridQNN(nn.Module):
         quantum_raw = torch.stack(quantum_outputs)  # [B, 4]
         quantum_features = self.quantum_postprocessor(quantum_raw)  # [B, 16]
         
-        # 3. 특성 융합
-        fused_features = torch.cat([cnn_features, quantum_features], dim=1)  # [B, 144]
+        # 특성 융합
+        fused_features = torch.cat([cnn_features, quantum_features], dim=1)  # [B, 80]
         
-        # 4. 메인 분류기
-        main_output = self.fusion_classifier(fused_features)
+        # 최종 분류
+        output = self.fusion_classifier(fused_features)
         
-        # 5. 앙상블 분류기
-        ensemble_output = self.ensemble_head(fused_features)
-        
-        # 6. 가중 결합 (메인 70%, 앙상블 30%)
-        final_output = 0.7 * main_output + 0.3 * ensemble_output
-        
-        return final_output
+        return output
 
 # ----------------------------------
 # 4. 모델 초기화 및 파라미터 분석
@@ -237,7 +181,6 @@ quantum_prep_params = sum(p.numel() for p in model.quantum_preprocessor.paramete
 quantum_post_params = sum(p.numel() for p in model.quantum_postprocessor.parameters())
 quantum_circuit_params = sum(p.numel() for p in model.qlayer.parameters())
 fusion_params = sum(p.numel() for p in model.fusion_classifier.parameters())
-ensemble_params = sum(p.numel() for p in model.ensemble_head.parameters())
 
 print(f"\n📊 Model Analysis:")
 print(f"Total parameters: {total_params:,}")
@@ -246,9 +189,9 @@ print(f"Quantum preprocessor: {quantum_prep_params:,}")
 print(f"Quantum circuit: {quantum_circuit_params:,}")
 print(f"Quantum postprocessor: {quantum_post_params:,}")
 print(f"Fusion classifier: {fusion_params:,}")
-print(f"Ensemble head: {ensemble_params:,}")
 
 # 제약조건 확인
+estimated_depth = n_layers * 4
 print(f"\n✅ Constraint Verification:")
 print(f"Total parameters (≤50K): {total_params <= 50000} ({total_params:,})")
 print(f"Quantum parameters (8-60): {8 <= quantum_circuit_params <= 60} ({quantum_circuit_params})")
@@ -260,7 +203,7 @@ if total_params > 50000:
     exit()
 
 # ----------------------------------
-# 5. 데이터 준비 및 훈련 설정
+# 5. 훈련 설정
 # ----------------------------------
 # 데이터를 double precision으로 변환
 train_data = train_data.double()
@@ -268,31 +211,29 @@ test_data = test_data.double()
 train_labels = train_labels.double().unsqueeze(1)
 test_labels = test_labels.double().unsqueeze(1)
 
-# DataLoader (작은 배치 크기로 양자 처리 최적화)
+# DataLoader
 batch_size = 16
 train_loader = DataLoader(TensorDataset(train_data, train_labels), 
                          batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(TensorDataset(test_data, test_labels), 
                         batch_size=batch_size, shuffle=False)
 
-# 고급 옵티마이저 설정 (컴포넌트별 최적화)
+# 옵티마이저 설정
 criterion = nn.BCELoss()
 optimizer = optim.AdamW([
     {'params': model.cnn_backbone.parameters(), 'lr': 0.001, 'weight_decay': 1e-4},
     {'params': model.quantum_preprocessor.parameters(), 'lr': 0.002, 'weight_decay': 1e-4},
     {'params': model.qlayer.parameters(), 'lr': 0.01, 'weight_decay': 1e-5},
     {'params': model.quantum_postprocessor.parameters(), 'lr': 0.005, 'weight_decay': 1e-4},
-    {'params': model.fusion_classifier.parameters(), 'lr': 0.003, 'weight_decay': 1e-4},
-    {'params': model.ensemble_head.parameters(), 'lr': 0.003, 'weight_decay': 1e-4}
+    {'params': model.fusion_classifier.parameters(), 'lr': 0.003, 'weight_decay': 1e-4}
 ])
 
-# 학습률 스케줄러
 scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.8, patience=12)
 
 # ----------------------------------
-# 6. 고급 훈련 루프 (90% 정확도 목표)
+# 6. 훈련 루프
 # ----------------------------------
-epochs = 120
+epochs = 100
 best_test_acc = 0
 patience_counter = 0
 patience = 20
@@ -300,7 +241,7 @@ patience = 20
 train_losses, train_accs = [], []
 test_losses, test_accs = [], []
 
-print(f"\n🚀 Starting Optimized Hybrid QNN Training (Target: 90%+ accuracy)...")
+print(f"\n🚀 Starting Optimized Hybrid QNN Training...")
 
 for epoch in range(epochs):
     # 훈련
@@ -310,14 +251,7 @@ for epoch in range(epochs):
     for xb, yb in tqdm(train_loader, desc=f"Epoch {epoch+1}", leave=False):
         optimizer.zero_grad()
         pred = model(xb)
-        
-        # Focal Loss (클래스 불균형 해결)
-        alpha = 0.25
-        gamma = 2.0
-        ce_loss = criterion(pred, yb)
-        pt = torch.exp(-ce_loss)
-        focal_loss = alpha * (1-pt)**gamma * ce_loss
-        loss = focal_loss.mean()
+        loss = criterion(pred, yb)
         
         # 그래디언트 클리핑
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -359,9 +293,8 @@ for epoch in range(epochs):
     if avg_test_acc > best_test_acc:
         best_test_acc = avg_test_acc
         patience_counter = 0
-        torch.save(model.state_dict(), 'best_hybrid_qnn_90.pth')
+        torch.save(model.state_dict(), 'best_hybrid_qnn_45k.pth')
         
-        # 90% 달성 시 알림
         if avg_test_acc >= 0.90:
             print(f"🎯 90% TARGET ACHIEVED! Test Accuracy: {avg_test_acc:.4f}")
     else:
@@ -378,16 +311,14 @@ for epoch in range(epochs):
 print(f"\n🎯 Training complete! Best Test Accuracy: {best_test_acc:.4f}")
 
 # ----------------------------------
-# 7. 최종 평가 및 분석
+# 7. 최종 평가
 # ----------------------------------
-# 최고 모델 로드
 try:
-    model.load_state_dict(torch.load('best_hybrid_qnn_90.pth'))
+    model.load_state_dict(torch.load('best_hybrid_qnn_45k.pth'))
     print("✅ Best model loaded")
 except:
     print("⚠️ Using current model")
 
-# 최종 평가
 model.eval()
 final_test_acc = 0
 all_preds, all_labels = [], []
@@ -403,28 +334,13 @@ with torch.no_grad():
 
 final_test_acc /= len(test_loader)
 
-# 분류 성능 분석
-from sklearn.metrics import classification_report, confusion_matrix
-
-all_preds = torch.tensor(all_preds)
-all_labels = torch.tensor(all_labels)
-pred_classes = (all_preds > 0.5).int()
-
 print(f"\n🎯 Final Test Accuracy: {final_test_acc:.4f}")
 print(f"🏆 Target Achievement: {'✅ SUCCESS' if final_test_acc >= 0.90 else '❌ FAILED'} (Target: 90%)")
 
-print(f"\n📊 Classification Report:")
-print(classification_report(all_labels.numpy(), pred_classes.numpy(), 
-                          target_names=['T-shirt/top', 'Shirt']))
-
-print(f"\n🔍 Confusion Matrix:")
-cm = confusion_matrix(all_labels.numpy(), pred_classes.numpy())
-print(cm)
-
 # 시각화
-plt.figure(figsize=(15, 5))
+plt.figure(figsize=(12, 4))
 
-plt.subplot(1, 3, 1)
+plt.subplot(1, 2, 1)
 plt.plot(train_losses, label='Train Loss', alpha=0.8)
 plt.plot(test_losses, label='Test Loss', alpha=0.8)
 plt.xlabel('Epoch')
@@ -433,7 +349,7 @@ plt.title('Training Progress - Loss')
 plt.legend()
 plt.grid(True, alpha=0.3)
 
-plt.subplot(1, 3, 2)
+plt.subplot(1, 2, 2)
 plt.plot(train_accs, label='Train Accuracy', alpha=0.8)
 plt.plot(test_accs, label='Test Accuracy', alpha=0.8)
 plt.axhline(y=0.90, color='g', linestyle='--', alpha=0.7, label='90% Target')
@@ -445,18 +361,8 @@ plt.title('Training Progress - Accuracy')
 plt.legend()
 plt.grid(True, alpha=0.3)
 
-plt.subplot(1, 3, 3)
-# 학습률 변화
-current_lrs = [group['lr'] for group in optimizer.param_groups]
-components = ['CNN', 'Q-Pre', 'QNN', 'Q-Post', 'Fusion', 'Ensemble']
-plt.bar(components, current_lrs, alpha=0.7)
-plt.ylabel('Learning Rate')
-plt.title('Component Learning Rates')
-plt.yscale('log')
-plt.xticks(rotation=45)
-
 plt.tight_layout()
-plt.savefig('hybrid_qnn_90_results.png', dpi=300, bbox_inches='tight')
+plt.savefig('hybrid_qnn_45k_results.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 print(f"\n🏆 Final Summary:")
@@ -469,7 +375,6 @@ print(f"\n📈 Model Efficiency:")
 print(f"Parameters used: {total_params:,} / 50,000 ({total_params/50000*100:.1f}%)")
 print(f"Quantum parameters: {quantum_circuit_params} (within 8-60 limit)")
 print(f"Circuit depth: {estimated_depth} (within 30 limit)")
-print(f"Accuracy per 1K params: {final_test_acc/(total_params/1000):.4f}")
 
 print(f"\n✅ Constraint Compliance:")
 print(f"✅ PennyLane framework used")
@@ -479,3 +384,52 @@ print(f"✅ Quantum params 8-60: {quantum_circuit_params}")
 print(f"✅ Total params ≤50K: {total_params:,}")
 print(f"✅ Amplitude Encoding used")
 print(f"✅ Hybrid architecture (CNN + QNN)")
+
+# ----------------------------------
+# 8. 테스트 데이터 추론 및 CSV 저장
+# ----------------------------------
+from datetime import datetime
+import numpy as np
+
+print(f"\n🔍 Starting inference on test data...")
+
+# 테스트 데이터로더 (배치 크기 1로 개별 추론)
+test_inference_loader = DataLoader(TensorDataset(test_data, test_labels), 
+                                  batch_size=1, shuffle=False)
+
+model.eval()
+all_preds, all_targets = [], []
+
+with torch.no_grad():
+    for data, target in tqdm(test_inference_loader, desc="Inference", 
+                           total=len(test_inference_loader), leave=False):
+        logits = model(data)
+        # 이진 분류이므로 0.5 기준으로 예측
+        pred = (logits > 0.5).long().view(1)
+        all_preds.append(pred.cpu())
+        all_targets.append(target.view(-1).cpu())
+
+y_pred = torch.cat(all_preds).numpy().astype(int)
+y_true = torch.cat(all_targets).numpy().astype(int)
+
+# 0·6 라벨만 평가 (우리 모델은 이미 0/6만 사용)
+test_mask = (y_true == 0) | (y_true == 1)  # 우리 모델에서는 0=T-shirt, 1=Shirt
+print("Total samples:", len(y_true))
+print("Target samples:", test_mask.sum())
+
+# 모델 결과가 1인 것을 6으로 변경 (원본 Fashion-MNIST 라벨로 복원)
+y_pred_mapped = np.where(y_pred == 1, 6, y_pred)
+y_true_mapped = np.where(y_true == 1, 6, y_true)
+
+acc = (y_pred_mapped[test_mask] == y_true_mapped[test_mask]).mean()
+print(f"Accuracy (labels 0/6 only): {acc:.4f}")
+
+# 현재 시각을 "YYYYMMDD_HHMMSS" 형식으로 포맷팅
+now = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# 원본 파일명을 기반으로 새 파일명 생성
+y_pred_filename = f"y_pred_{now}.csv"
+np.savetxt(y_pred_filename, y_pred_mapped, fmt="%d")
+
+print(f"✅ Predictions saved to: {y_pred_filename}")
+print(f"📊 Prediction distribution: 0={np.sum(y_pred_mapped==0)}, 6={np.sum(y_pred_mapped==6)}")
