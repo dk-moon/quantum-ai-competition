@@ -102,11 +102,11 @@ class QCNN_Model(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(1, 256),      # params: 1*256 + 256 = 512
             nn.ReLU(),
-            nn.Dropout(0.4),
+            nn.Dropout(0.2),
             
             nn.Linear(256, 128),    # params: 256*128 + 128 = 32,896
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.2),
             
             nn.Linear(128, 64),     # params: 128*64 + 64 = 8,256
             nn.ReLU(),
@@ -145,7 +145,7 @@ test_y = test_y.double().unsqueeze(1)
 train_loader = DataLoader(TensorDataset(train_x, train_y), batch_size=32, shuffle=True)
 test_loader = DataLoader(TensorDataset(test_x, test_y), batch_size=32)
 
-epochs = 100
+epochs = 300
 
 # 모델 선택 및 파라미터 확인
 model = QCNN_Model()
@@ -291,3 +291,58 @@ print(f"\n🏆 Final Summary:")
 print(f"Best accuracy: {best_test_acc:.4f}")
 print(f"Total epochs: {len(train_accs)}")
 print(f"Parameter efficiency: {best_test_acc/total_params*1000000:.2f} acc/1M params")
+
+# ----------------------------------
+# 테스트 데이터 추론 및 CSV 저장
+# ----------------------------------
+from datetime import datetime
+
+print(f"\n🔍 Starting inference on test data...")
+
+# 최고 모델 로드
+try:
+    model.load_state_dict(torch.load('best_cnn_qnn_45k.pth'))
+    print("✅ Best model loaded")
+except:
+    print("⚠️ Using current model")
+
+# 테스트 데이터로더 (배치 크기 1로 개별 추론)
+test_inference_loader = DataLoader(TensorDataset(test_x, test_y), 
+                                  batch_size=1, shuffle=False)
+
+model.eval()
+all_preds, all_targets = [], []
+
+with torch.no_grad():
+    for data, target in tqdm(test_inference_loader, desc="Inference", 
+                           total=len(test_inference_loader), leave=False):
+        logits = model(data)
+        # BCEWithLogitsLoss를 사용했으므로 sigmoid 적용 후 0.5 기준으로 예측
+        pred = (torch.sigmoid(logits) > 0.5).long().view(1)
+        all_preds.append(pred.cpu())
+        all_targets.append(target.view(-1).cpu())
+
+y_pred = torch.cat(all_preds).numpy().astype(int)
+y_true = torch.cat(all_targets).numpy().astype(int)
+
+# 0·6 라벨만 평가 (우리 모델은 이미 0/6만 사용)
+test_mask = (y_true == 0) | (y_true == 1)  # 우리 모델에서는 0=T-shirt, 1=Shirt
+print("Total samples:", len(y_true))
+print("Target samples:", test_mask.sum())
+
+# 모델 결과가 1인 것을 6으로 변경 (원본 Fashion-MNIST 라벨로 복원)
+y_pred_mapped = np.where(y_pred == 1, 6, y_pred)
+y_true_mapped = np.where(y_true == 1, 6, y_true)
+
+acc = (y_pred_mapped[test_mask] == y_true_mapped[test_mask]).mean()
+print(f"Accuracy (labels 0/6 only): {acc:.4f}")
+
+# 현재 시각을 "YYYYMMDD_HHMMSS" 형식으로 포맷팅
+now = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# 원본 파일명을 기반으로 새 파일명 생성
+y_pred_filename = f"qcnn_y_pred_{now}.csv"
+np.savetxt(y_pred_filename, y_pred_mapped, fmt="%d")
+
+print(f"✅ Predictions saved to: {y_pred_filename}")
+print(f"📊 Prediction distribution: 0={np.sum(y_pred_mapped==0)}, 6={np.sum(y_pred_mapped==6)}")

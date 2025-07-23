@@ -14,14 +14,14 @@ def load_fashion_mnist_binary():
     """T-shirt/top (0) vs Shirt (6) 이진 분류 데이터"""
     train_transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.RandomRotation(10),
+        transforms.RandomRotation(30),
         transforms.RandomHorizontalFlip(0.1),
-        transforms.Normalize((0.2860,), (0.3530,))
+        transforms.Normalize((0.5,), (0.5,))
     ])
     
     test_transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.2860,), (0.3530,))
+        transforms.Normalize((0.5,), (0.5,))
     ])
     
     train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=train_transform)
