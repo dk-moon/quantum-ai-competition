@@ -14,22 +14,12 @@ import matplotlib.pyplot as plt
 # 데이터 로드 및 전처리
 # -----------------------
 def load_fashion_mnist_binary():
-    # 개선된 데이터 전처리
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.2860,), (0.3530,)),  # Fashion-MNIST 실제 통계값
-        transforms.RandomRotation(5),  # 데이터 증강
-        transforms.RandomHorizontalFlip(0.1),  # 약간의 flip (의류 특성상 제한적)
+        transforms.Normalize((0.5,), (0.5,))
     ])
-    
-    # 테스트용 변환 (증강 없음)
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.2860,), (0.3530,))
-    ])
-    
     train_set = datasets.FashionMNIST('./data', train=True, download=True, transform=transform)
-    test_set = datasets.FashionMNIST('./data', train=False, download=True, transform=test_transform)
+    test_set = datasets.FashionMNIST('./data', train=False, download=True, transform=transform)
 
     def filter(dataset):
         indices = [i for i, (_, y) in enumerate(dataset) if y in [0, 6]]
@@ -53,58 +43,45 @@ print(f"Test data - Class 0: {(test_y == 0).sum()}, Class 1: {(test_y == 1).sum(
 # QNN 정의 (8-qubit 풍부한 Quantum Circuit)
 # -----------------------
 n_qubits = 8  # 8-qubit 시스템
-n_qnn_params = 48  # 6개 레이어로 더 깊은 circuit
+n_qnn_params = 24  # 더 많은 파라미터로 표현력 향상
 dev = qml.device("default.qubit", wires=n_qubits)
 
-# 최적화된 8-qubit Quantum Circuit (48 파라미터, 6 layers)
+# 풍부한 8-qubit Quantum Circuit 정의 (24 파라미터)
 @qml.qnode(dev, interface="torch")
 def quantum_circuit(inputs, qnn_params):
-    # Data encoding - 강화된 인코딩
+    # Data encoding - 8개 입력을 8개 qubit에 각각 인코딩
     for i in range(n_qubits):
-        qml.H(wires=i)
-        qml.RZ(2.*inputs[i], wires=i)
-        qml.RY(inputs[i], wires=i)  # 추가 인코딩
+        qml.H(wires=i)  # 모든 qubit을 superposition 상태로
+        qml.RZ(2.*inputs[i], wires=i)  # 데이터 인코딩
     
-    # Layer 1: RY rotations + entanglement
-    for i in range(n_qubits):
-        qml.RY(2.*qnn_params[i], wires=i)
+    # Entangling layer 1 - 인접한 qubit들 간의 entanglement
     for i in range(n_qubits - 1):
         qml.CNOT(wires=[i, i+1])
-    qml.CNOT(wires=[7, 0])  # circular
     
-    # Layer 2: RX rotations + different entanglement
+    # Variational layer 1 - 모든 qubit에 RY 회전 (8개 파라미터)
+    for i in range(n_qubits):
+        qml.RY(2.*qnn_params[i], wires=i)
+    
+    # Circular entanglement
+    qml.CNOT(wires=[7, 0])  # 마지막과 첫 번째 연결
+    
+    # Variational layer 2 - 모든 qubit에 RX 회전 (8개 파라미터)
     for i in range(n_qubits):
         qml.RX(2.*qnn_params[8 + i], wires=i)
+    
+    # 더 복잡한 entanglement 패턴
     for i in range(0, n_qubits-1, 2):
         qml.CNOT(wires=[i, i+1])
+    
+    # 추가 entanglement - 홀수 인덱스 간 연결
     for i in range(1, n_qubits-2, 2):
         qml.CNOT(wires=[i, i+2])
     
-    # Layer 3: RZ rotations + long-range entanglement
+    # Variational layer 3 - 모든 qubit에 RZ 회전 (8개 파라미터)
     for i in range(n_qubits):
         qml.RZ(2.*qnn_params[16 + i], wires=i)
-    for i in range(n_qubits//2):
-        qml.CNOT(wires=[i, i + n_qubits//2])
     
-    # Layer 4: Additional RY layer
-    for i in range(n_qubits):
-        qml.RY(2.*qnn_params[24 + i], wires=i)
-    for i in range(n_qubits - 1):
-        qml.CNOT(wires=[i, i+1])
-    
-    # Layer 5: RX layer with different pattern
-    for i in range(n_qubits):
-        qml.RX(2.*qnn_params[32 + i], wires=i)
-    for i in range(0, n_qubits, 2):
-        if i+1 < n_qubits:
-            qml.CNOT(wires=[i, i+1])
-    
-    # Layer 6: Final RZ layer
-    for i in range(n_qubits):
-        qml.RZ(2.*qnn_params[40 + i], wires=i)
-    
-    # Multi-qubit measurement for richer output
-    return qml.expval(qml.PauliZ(0) @ qml.PauliZ(1) @ qml.PauliZ(2))
+    return qml.expval(qml.PauliZ(0))
 
 # QNN 파라미터를 직접 관리하는 클래스
 class QuantumLayer(nn.Module):
@@ -131,77 +108,56 @@ qlayer = QuantumLayer(n_qnn_params)
 class QCNN_Model(nn.Module):
     def __init__(self):
         super().__init__()
-        # 목표: 50,000 파라미터 이하
-        # QNN: 48 파라미터 (8-qubit 6-layer circuit)
-        # CNN: 강화된 특징 추출
-        # Classifier: 깊고 넓은 네트워크
+        # 목표: 정확히 45,000 파라미터
+        # QNN: 24 파라미터 (8-qubit 풍부한 circuit)
+        # 남은 예산: 44,976 파라미터
         
-        # 최적화된 CNN (50K 제한 내에서 균형잡힌 설계)
+        # 8차원 출력 CNN (8-qubit QNN에 맞춤)
         self.cnn = nn.Sequential(
             # 28x28 → 14x14
-            nn.Conv2d(1, 8, 5, stride=2, padding=2),     # params: 1*8*25 + 8 = 208
-            nn.BatchNorm2d(8),                           # params: 8*2 = 16
+            nn.Conv2d(1, 2, 5, stride=2, padding=2),     # params: 1*2*25 + 2 = 52
             nn.ReLU(),
-            nn.Dropout2d(0.1),
             
             # 14x14 → 7x7
-            nn.Conv2d(8, 16, 3, stride=2, padding=1),    # params: 8*16*9 + 16 = 1,168
-            nn.BatchNorm2d(16),                          # params: 16*2 = 32
+            nn.Conv2d(2, 2, 3, stride=2, padding=1),     # params: 2*2*9 + 2 = 38
             nn.ReLU(),
-            nn.Dropout2d(0.1),
             
             # 7x7 → 4x4
-            nn.Conv2d(16, 12, 3, stride=1, padding=1),   # params: 16*12*9 + 12 = 1,740
-            nn.BatchNorm2d(12),                          # params: 12*2 = 24
+            nn.Conv2d(2, 2, 3, stride=1, padding=1),     # params: 2*2*9 + 2 = 38
             nn.ReLU(),
-            nn.Dropout2d(0.1),
-            
-            # 4x4 → 2x2
-            nn.Conv2d(12, 8, 3, stride=2, padding=1),    # params: 12*8*9 + 8 = 872
-            nn.BatchNorm2d(8),                           # params: 8*2 = 16
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d(2),                     # 2x2x8 = 32
+            nn.AdaptiveAvgPool2d(2),                     # 2x2x2 = 8
             
             nn.Flatten(),
-            nn.Linear(32, 16),                           # params: 32*16 + 16 = 528
-            nn.BatchNorm1d(16),                          # params: 16*2 = 32
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(16, 8),                            # params: 16*8 + 8 = 136 (8-qubit 입력)
-            nn.BatchNorm1d(8),                           # params: 8*2 = 16
+            nn.Linear(8, 8),                             # params: 8*8 + 8 = 72 (8-qubit 입력)
             nn.ReLU(),
             nn.Dropout(0.1)
         ).double()
         
         self.qnn = qlayer
         
-        # 50K 제한 준수 분류기 (최종 조정)
+        # 축소된 분류기 (QNN 파라미터 증가로 인한 조정)
         self.classifier = nn.Sequential(
-            nn.Linear(1, 220),      # params: 1*220 + 220 = 440
-            nn.BatchNorm1d(220),    # params: 220*2 = 440
+            nn.Linear(1, 200),      # params: 1*200 + 200 = 400
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.2),
             
-            nn.Linear(220, 110),    # params: 220*110 + 110 = 24,310
-            nn.BatchNorm1d(110),    # params: 110*2 = 220
+            nn.Linear(200, 100),    # params: 200*100 + 100 = 20,100
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.2),
             
-            nn.Linear(110, 55),     # params: 110*55 + 55 = 6,105
-            nn.BatchNorm1d(55),     # params: 55*2 = 110
+            nn.Linear(100, 50),     # params: 100*50 + 50 = 5,050
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.2),
             
-            nn.Linear(55, 25),      # params: 55*25 + 25 = 1,400
-            nn.BatchNorm1d(25),     # params: 25*2 = 50
+            nn.Linear(50, 20),      # params: 50*20 + 20 = 1,020
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(0.2),
             
-            nn.Linear(25, 1),       # params: 25*1 + 1 = 26
+            nn.Linear(20, 1),       # params: 20*1 + 1 = 21
+            # Sigmoid 제거 - BCEWithLogitsLoss 사용
         ).double()
         
-        # 총 계산: CNN(약 4,788) + QNN(48) + Classifier(약 33,101) = 약 37,937
-        # 50K 제한 준수하면서 성능 최적화
+        # 총 계산: CNN(약 202) + QNN(24) + Classifier(약 26,591) = 약 26,817
         
     def forward(self, x):
         features = self.cnn(x)  # 이제 8차원 출력 (8-qubit QNN 입력에 맞춤)
@@ -224,9 +180,8 @@ test_x = test_x.double()
 train_y = train_y.double().unsqueeze(1)
 test_y = test_y.double().unsqueeze(1)
 
-# 최적화된 배치 크기
-train_loader = DataLoader(TensorDataset(train_x, train_y), batch_size=64, shuffle=True)
-test_loader = DataLoader(TensorDataset(test_x, test_y), batch_size=64)
+train_loader = DataLoader(TensorDataset(train_x, train_y), batch_size=32, shuffle=True)
+test_loader = DataLoader(TensorDataset(test_x, test_y), batch_size=32)
 
 epochs = 300
 
@@ -243,12 +198,12 @@ if total_params <= 50000:
 else:
     print(f"❌ Parameter limit exceeded: {total_params:,} > 50,000")
 
-# 90%+ 목표 최적화된 학습률 설정
+# 개선된 학습률 설정
 optimizer = optim.AdamW([
-    {'params': model.cnn.parameters(), 'lr': 0.003, 'weight_decay': 1e-4},
-    {'params': model.qnn.parameters(), 'lr': 0.005, 'weight_decay': 1e-6},  # QNN 더 적극적 학습
+    {'params': model.cnn.parameters(), 'lr': 0.001, 'weight_decay': 1e-4},
+    {'params': model.qnn.parameters(), 'lr': 0.005, 'weight_decay': 1e-5},  # QNN 학습률 조정
     {'params': model.classifier.parameters(), 'lr': 0.002, 'weight_decay': 1e-4}
-], betas=(0.9, 0.999), eps=1e-8)
+])
 
 # 클래스 가중치 계산 (불균형 해결)
 class_counts = torch.bincount(train_y.long().flatten())
@@ -259,15 +214,14 @@ print(f"Class weights: {class_weights}")
 
 # 가중치가 적용된 손실 함수
 criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights[1]/class_weights[0])
-# 더 적극적인 스케줄링
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.7, patience=20, min_lr=1e-6)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.8, patience=30)
 
 # -----------------------
 # 훈련 루프
 # -----------------------
 best_test_acc = 0
 patience_counter = 0
-patience = 40  # 더 많은 기회 제공
+patience = 25
 
 train_losses, train_accs = [], []
 test_losses, test_accs = [], []
@@ -352,31 +306,31 @@ print(f"Parameter limit (≤50K): {total_params <= 50000} ({total_params:,})")
 print(f"QNN parameters (8-60): {8 <= qnn_params <= 60} ({qnn_params})")
 print(f"Hybrid model: ✅ (CNN + QNN + Classifier)")
 
-# # 결과 시각화
-# plt.figure(figsize=(12, 4))
+# 결과 시각화
+plt.figure(figsize=(12, 4))
 
-# plt.subplot(1, 2, 1)
-# plt.plot(train_losses, label='Train Loss', alpha=0.8)
-# plt.plot(test_losses, label='Test Loss', alpha=0.8)
-# plt.xlabel('Epoch')
-# plt.ylabel('Loss')
-# plt.title('Training Progress - Loss')
-# plt.legend()
-# plt.grid(True, alpha=0.3)
+plt.subplot(1, 2, 1)
+plt.plot(train_losses, label='Train Loss', alpha=0.8)
+plt.plot(test_losses, label='Test Loss', alpha=0.8)
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Training Progress - Loss')
+plt.legend()
+plt.grid(True, alpha=0.3)
 
-# plt.subplot(1, 2, 2)
-# plt.plot(train_accs, label='Train Accuracy', alpha=0.8)
-# plt.plot(test_accs, label='Test Accuracy', alpha=0.8)
-# plt.axhline(y=best_test_acc, color='r', linestyle='--', alpha=0.7, label=f'Best: {best_test_acc:.4f}')
-# plt.xlabel('Epoch')
-# plt.ylabel('Accuracy')
-# plt.title('Training Progress - Accuracy')
-# plt.legend()
-# plt.grid(True, alpha=0.3)
+plt.subplot(1, 2, 2)
+plt.plot(train_accs, label='Train Accuracy', alpha=0.8)
+plt.plot(test_accs, label='Test Accuracy', alpha=0.8)
+plt.axhline(y=best_test_acc, color='r', linestyle='--', alpha=0.7, label=f'Best: {best_test_acc:.4f}')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.title('Training Progress - Accuracy')
+plt.legend()
+plt.grid(True, alpha=0.3)
 
-# plt.tight_layout()
-# plt.savefig('cnn_qnn_45k_results.png', dpi=300, bbox_inches='tight')
-# plt.show()
+plt.tight_layout()
+plt.savefig('cnn_qnn_45k_results.png', dpi=300, bbox_inches='tight')
+plt.show()
 
 print(f"\n🏆 Final Summary:")
 print(f"Best accuracy: {best_test_acc:.4f}")
@@ -384,11 +338,11 @@ print(f"Total epochs: {len(train_accs)}")
 print(f"Parameter efficiency: {best_test_acc/total_params*1000000:.2f} acc/1M params")
 
 # ----------------------------------
-# 기존 방식: 0,6 클래스만으로 테스트 성능 평가
+# 테스트 데이터 추론 및 CSV 저장
 # ----------------------------------
 from datetime import datetime
 
-print(f"\n🔍 Starting inference on filtered test data (0,6 classes only)...")
+print(f"\n🔍 Starting inference on test data...")
 
 # 최고 모델 로드
 try:
@@ -397,7 +351,7 @@ try:
 except:
     print("⚠️ Using current model")
 
-# 기존 필터링된 테스트 데이터로 성능 평가
+# 테스트 데이터로더 (배치 크기 1로 개별 추론)
 test_inference_loader = DataLoader(TensorDataset(test_x, test_y), 
                                   batch_size=1, shuffle=False)
 
@@ -405,81 +359,35 @@ model.eval()
 all_preds, all_targets = [], []
 
 with torch.no_grad():
-    for data, target in tqdm(test_inference_loader, desc="Filtered Test Inference", 
+    for data, target in tqdm(test_inference_loader, desc="Inference", 
                            total=len(test_inference_loader), leave=False):
         logits = model(data)
+        # BCEWithLogitsLoss를 사용했으므로 sigmoid 적용 후 0.5 기준으로 예측
         pred = (torch.sigmoid(logits) > 0.5).long().view(1)
         all_preds.append(pred.cpu())
         all_targets.append(target.view(-1).cpu())
 
-y_pred_filtered = torch.cat(all_preds).numpy().astype(int)
-y_true_filtered = torch.cat(all_targets).numpy().astype(int)
+y_pred = torch.cat(all_preds).numpy().astype(int)
+y_true = torch.cat(all_targets).numpy().astype(int)
 
-# 필터링된 데이터 성능 평가
-y_pred_mapped_filtered = np.where(y_pred_filtered == 1, 6, y_pred_filtered)
-y_true_mapped_filtered = np.where(y_true_filtered == 1, 6, y_true_filtered)
+# 0·6 라벨만 평가 (우리 모델은 이미 0/6만 사용)
+test_mask = (y_true == 0) | (y_true == 1)  # 우리 모델에서는 0=T-shirt, 1=Shirt
+print("Total samples:", len(y_true))
+print("Target samples:", test_mask.sum())
 
-filtered_acc = (y_pred_mapped_filtered == y_true_mapped_filtered).mean()
-print(f"📊 Filtered Test Results (0,6 classes only):")
-print(f"Total samples: {len(y_pred_filtered)}")
-print(f"Accuracy: {filtered_acc:.4f}")
-print(f"Prediction distribution: 0={np.sum(y_pred_mapped_filtered==0)}, 6={np.sum(y_pred_mapped_filtered==6)}")
+# 모델 결과가 1인 것을 6으로 변경 (원본 Fashion-MNIST 라벨로 복원)
+y_pred_mapped = np.where(y_pred == 1, 6, y_pred)
+y_true_mapped = np.where(y_true == 1, 6, y_true)
 
-# ----------------------------------
-# 최종 CSV 생성: 전체 10,000개 테스트셋 처리
-# ----------------------------------
-print(f"\n🔍 Generating final CSV with full 10,000 test samples...")
+acc = (y_pred_mapped[test_mask] == y_true_mapped[test_mask]).mean()
+print(f"Accuracy (labels 0/6 only): {acc:.4f}")
 
-# 전체 Fashion-MNIST 테스트셋 로드 (필터링 없음)
-full_test_transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.2860,), (0.3530,))
-])
-full_test_set = datasets.FashionMNIST('./data', train=False, download=False, transform=full_test_transform)
-
-# 전체 10,000개 예측 배열 초기화
-final_predictions = np.zeros(len(full_test_set), dtype=int)
-
-print(f"Processing {len(full_test_set)} samples for final CSV...")
-
-# 각 샘플을 개별적으로 처리
-for idx in tqdm(range(len(full_test_set)), desc="Final CSV Generation"):
-    data, true_label = full_test_set[idx]
-    
-    if true_label in [0, 6]:  # T-shirt(0) 또는 Shirt(6)만 모델로 추론
-        # 모델 추론
-        data_batch = data.unsqueeze(0).double()  # 배치 차원 추가
-        with torch.no_grad():
-            logits = model(data_batch)
-            pred = (torch.sigmoid(logits) > 0.5).long().item()
-        
-        # 모델 출력 매핑: 0→0, 1→6
-        final_predictions[idx] = 6 if pred == 1 else 0
-    else:
-        # 0,6이 아닌 클래스는 원래 라벨 그대로 유지
-        final_predictions[idx] = true_label
-
-# 최종 검증: 0,6 클래스에 대한 정확도 확인
-full_true_labels = np.array([full_test_set[i][1] for i in range(len(full_test_set))])
-eval_mask = (full_true_labels == 0) | (full_true_labels == 6)
-
-final_acc = (final_predictions[eval_mask] == full_true_labels[eval_mask]).mean()
-print(f"\n📊 Final CSV Validation:")
-print(f"Total 0/6 samples in full dataset: {eval_mask.sum()}")
-print(f"Accuracy on 0/6 classes: {final_acc:.4f}")
-
-# CSV 파일 저장
+# 현재 시각을 "YYYYMMDD_HHMMSS" 형식으로 포맷팅
 now = datetime.now().strftime("%Y%m%d_%H%M%S")
-csv_filename = f"qcnn_y_pred_full_{now}.csv"
-np.savetxt(csv_filename, final_predictions, fmt="%d")
 
-print(f"\n✅ Final CSV saved: {csv_filename}")
-print(f"📊 Final prediction distribution:")
-for class_idx in range(10):
-    count = np.sum(final_predictions == class_idx)
-    print(f"  Class {class_idx}: {count} samples")
+# 원본 파일명을 기반으로 새 파일명 생성
+y_pred_filename = f"qcnn_y_pred_{now}.csv"
+np.savetxt(y_pred_filename, y_pred_mapped, fmt="%d")
 
-print(f"\n🎯 Summary:")
-print(f"- Filtered test accuracy (training validation): {filtered_acc:.4f}")
-print(f"- Full dataset accuracy (0/6 classes only): {final_acc:.4f}")
-print(f"- CSV contains {len(final_predictions)} predictions")
+print(f"✅ Predictions saved to: {y_pred_filename}")
+print(f"📊 Prediction distribution: 0={np.sum(y_pred_mapped==0)}, 6={np.sum(y_pred_mapped==6)}")
