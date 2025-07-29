@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from datetime import datetime
 import math
+from tqdm.auto import tqdm
 
 # -----------------------
 # 데이터 로드 및 전처리
@@ -182,7 +183,7 @@ class PaperQNN(nn.Module):
             # 변분 최적화로 FRQI 근사
             optimizer = optim.Adam([encoding_params], lr=0.03)
             
-            for epoch in range(100):  # 논문에서는 10,000 epoch이지만 시간 단축
+            for epoch in tqdm(range(10000)):  # 논문에서는 10,000 epoch이지만 시간 단축
                 optimizer.zero_grad()
                 
                 # 현재 상태와 목표 FRQI 상태 간의 충실도 계산
@@ -195,7 +196,7 @@ class PaperQNN(nn.Module):
                 loss.backward()
                 optimizer.step()
                 
-                if epoch % 20 == 0:
+                if epoch % 10000 == 0:
                     print(f"Image {image_id} encoding epoch {epoch}, loss: {loss.item():.6f}")
             
             self.encoding_params_dict[image_id] = encoding_params.detach()
@@ -274,10 +275,10 @@ scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0
 # -----------------------
 # 훈련 루프
 # -----------------------
-epochs = 50  # 논문에서는 200 epoch이지만 시간 단축
+epochs = 1000  # 논문에서는 200 epoch이지만 시간 단축
 best_test_acc = 0
 patience_counter = 0
-patience = 15
+patience = 30
 
 train_losses, train_accs = [], []
 test_losses, test_accs = [], []
@@ -345,31 +346,31 @@ for epoch in tqdm(range(epochs)):
 
 print(f"\n🎯 Training complete! Best Test Accuracy: {best_test_acc:.4f}")
 
-# 결과 시각화
-plt.figure(figsize=(12, 4))
+# # 결과 시각화
+# plt.figure(figsize=(12, 4))
 
-plt.subplot(1, 2, 1)
-plt.plot(train_losses, label='Train Loss', alpha=0.8)
-plt.plot(test_losses, label='Test Loss', alpha=0.8)
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Paper QNN Training - Loss')
-plt.legend()
-plt.grid(True, alpha=0.3)
+# plt.subplot(1, 2, 1)
+# plt.plot(train_losses, label='Train Loss', alpha=0.8)
+# plt.plot(test_losses, label='Test Loss', alpha=0.8)
+# plt.xlabel('Epoch')
+# plt.ylabel('Loss')
+# plt.title('Paper QNN Training - Loss')
+# plt.legend()
+# plt.grid(True, alpha=0.3)
 
-plt.subplot(1, 2, 2)
-plt.plot(train_accs, label='Train Accuracy', alpha=0.8)
-plt.plot(test_accs, label='Test Accuracy', alpha=0.8)
-plt.axhline(y=best_test_acc, color='r', linestyle='--', alpha=0.7, label=f'Best: {best_test_acc:.4f}')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy')
-plt.title('Paper QNN Training - Accuracy')
-plt.legend()
-plt.grid(True, alpha=0.3)
+# plt.subplot(1, 2, 2)
+# plt.plot(train_accs, label='Train Accuracy', alpha=0.8)
+# plt.plot(test_accs, label='Test Accuracy', alpha=0.8)
+# plt.axhline(y=best_test_acc, color='r', linestyle='--', alpha=0.7, label=f'Best: {best_test_acc:.4f}')
+# plt.xlabel('Epoch')
+# plt.ylabel('Accuracy')
+# plt.title('Paper QNN Training - Accuracy')
+# plt.legend()
+# plt.grid(True, alpha=0.3)
 
-plt.tight_layout()
-plt.savefig('paper_qnn_results.png', dpi=300, bbox_inches='tight')
-plt.show()
+# plt.tight_layout()
+# plt.savefig('paper_qnn_results.png', dpi=300, bbox_inches='tight')
+# plt.show()
 
 print(f"\n🏆 Final Summary:")
 print(f"Best accuracy: {best_test_acc:.4f}")

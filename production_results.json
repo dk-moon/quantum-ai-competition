@@ -1,0 +1,35 @@
+{
+  "best_accuracy": 0.7495039682539683,
+  "final_epoch": 30,
+  "performance_stats": {
+    "frqi_encoding": {
+      "mean": 0.00018145879178667267,
+      "min": 0.0001327991485595703,
+      "max": 0.06482505798339844,
+      "count": 147499
+    },
+    "quantum_forward": {
+      "mean": 0.024411700088637217,
+      "min": 0.01967477798461914,
+      "max": 0.20766901969909668,
+      "count": 420000
+    },
+    "total_forward": {
+      "mean": 0.7827588077368076,
+      "min": 0.3215022087097168,
+      "max": 1.6389579772949219,
+      "count": 13140
+    },
+    "cache_info": {
+      "size": 11957,
+      "limit": 12000,
+      "hit_rate": 0.8200217445847621
+    }
+  },
+  "config": {
+    "train_size": 12000,
+    "test_size": 2000,
+    "batch_size": 32,
+    "epochs": 300
+  }
+}
